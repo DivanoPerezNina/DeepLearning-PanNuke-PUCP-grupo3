@@ -1,47 +1,36 @@
 """
 ===============================================================================
-SCRIPT 07: PREPROCESAMIENTO DEL DATASET PANNUKE (SEGMENTACIÓN MULTICLASE)
+PREPROCESAMIENTO DEL DATASET PANNUKE (SEGMENTACION BINARIA)
 ===============================================================================
-Extiende el pipeline de descarga/estructuración visto en 05 y 06 para PanNuke:
-7,904 parches H&E de 256x256 px, 19 tipos de tejido, núcleos anotados en
-5 clases (Neoplásico, Inflamatorio, Conectivo, Muerto, Epitelial) + fondo.
+Este script asume que ya descargaste manualmente un mirror de PanNuke desde
+Kaggle y lo dejaste en `data/` con esta estructura:
 
-DIFERENCIA CLAVE CON 05/06:
-  - 06 (DATASETS_REGISTRY) solo tiene registrado DSB2018 y funde todas las
-    máscaras de instancia en una sola máscara BINARIA (0/255).
-  - 05 (BioImageSegmentationDataset) fuerza `.convert("L")` + `> 0`, es decir,
-    también binariza.
-  - PanNuke necesita preservar las 5 clases, así que ambos se reescriben aquí
-    en vez de reusarse tal cual.
+    data/train/images/*.png      data/train/masks/*.png
+    data/validate/images/*.png   data/validate/masks/*.png
 
-DESCARGA:
-  PanNuke no se puede automatizar con un solo pooch.retrieve() confiable:
-  - La página oficial del TIA Centre (Univ. de Warwick) se reorganizó y ya
-    no expone un enlace .zip directo por fold: https://warwick.ac.uk/TIA
-  - El espejo de Kaggle requiere autenticación (API key / cuenta):
-    https://www.kaggle.com/datasets/theredlad/pannuke-dataset-experimental-data
-  Por eso este script asume que YA descargaste y descomprimiste los 3 folds
-  manualmente en `raw_data_dir/foldN/{images.npy,masks.npy,types.npy}`.
-  Si no encuentra esos archivos, genera datos SINTÉTICOS con la misma forma
-  para que puedas probar el pipeline completo sin tener el dataset real.
+DIFERENCIA CON EL PANNUKE OFICIAL:
+  El PanNuke oficial (TIA Centre / Warwick, o el mirror de Kaggle
+  theredlad/pannuke-dataset-experimental-data) distribuye 3 folds en .npy
+  con mascaras de 6 canales (5 tipos de nucleo + fondo), preservando las
+  clases Neoplasico/Inflamatorio/Conectivo/Muerto/Epitelial.
 
-FORMATO OFICIAL POR FOLD:
-  images.npy -> (N, 256, 256, 3)  uint8   parches RGB H&E
-  masks.npy  -> (N, 256, 256, 6)  canales 0-4 = ID de instancia por clase
-                (0 = sin núcleo, >0 = ID de instancia); canal 5 = fondo
-  types.npy  -> (N,) string        tipo de tejido de cada parche (no se usa
-                en este script, pero queda disponible para análisis futuro)
+  El mirror que se uso aqui ya viene como PNG con mascaras BINARIAS
+  (0 = fondo, 255 = nucleo, sin distincion de tipo) y solo 2 splits
+  (train/validate, sin test). Por eso este script:
+    1. Genera el split de test faltante partiendo `validate` 50/50.
+    2. Trabaja con segmentacion BINARIA (1 clase "nucleo" + fondo), no con
+       las 6 clases del PanNuke completo.
 
-SPLIT OFICIAL (a diferencia del split aleatorio 80/10/10 que usa 05):
-  Fold 1 = Train | Fold 2 = Validation | Fold 3 = Test
+  Si en el futuro se consigue el .npy oficial multiclase, usar
+  `descargar_pannuke.py` + un script de estructuracion multiclase en su
+  lugar (ver historial de este archivo).
 ===============================================================================
 """
 
 import os
-import sys
 import glob
 import random
-from typing import Tuple, List, Dict, Any
+from typing import Tuple, List, Dict
 
 import numpy as np
 from PIL import Image
@@ -53,203 +42,113 @@ os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 
 
 # =============================================================================
-# CONSTANTES DEL DATASET
+# CONSTANTES
 # =============================================================================
 
-# Índice 0 = fondo. Índices 1-5 = canales 0-4 de masks.npy, en ese orden.
-CLASS_NAMES = ["Fondo", "Neoplasico", "Inflamatorio", "Conectivo", "Muerto", "Epitelial"]
-NUM_CLASSES = len(CLASS_NAMES)  # 6 (incluye fondo) -> UNet(out_channels=6)
-
-FOLD_TO_SPLIT = {"fold1": "train", "fold2": "val", "fold3": "test"}
-
-
-# =============================================================================
-# SECCION 1: LOCALIZAR DATOS REALES O GENERAR SINTETICOS DE RESPALDO
-# =============================================================================
-
-def _generate_synthetic_pannuke_fold(num_samples: int, seed: int) -> Dict[str, np.ndarray]:
-    """Genera un fold sintetico con la misma forma que el PanNuke real, para
-    poder probar el pipeline de estructuracion/Dataset sin el dataset real."""
-    rng = np.random.default_rng(seed)
-    images = np.full((num_samples, 256, 256, 3), 235, dtype=np.uint8)  # fondo tipo "vidrio"
-    masks = np.zeros((num_samples, 256, 256, 6), dtype=np.int32)
-    types = rng.choice(["Colon", "Breast", "Lung", "Kidney", "Skin"], size=num_samples).astype(object)
-
-    for i in range(num_samples):
-        n_nuclei = rng.integers(20, 60)
-        instance_id = 1
-        for _ in range(n_nuclei):
-            class_idx = rng.integers(0, 5)  # 0..4 -> Neoplasico..Epitelial
-            cy, cx = rng.integers(15, 241, size=2)
-            r = rng.integers(5, 14)
-            yy, xx = np.ogrid[:256, :256]
-            circle = (yy - cy) ** 2 + (xx - cx) ** 2 <= r ** 2
-            masks[i, :, :, class_idx][circle] = instance_id
-            instance_id += 1
-            images[i][circle] = [60 + class_idx * 30, 30, 110 - class_idx * 10]  # tono distinto por clase
-
-        no_nucleus = masks[i, :, :, :5].sum(axis=-1) == 0
-        masks[i, :, :, 5][no_nucleus] = 1  # canal 5 = fondo
-
-    return {"images": images, "masks": masks, "types": types}
-
-
-def locate_or_generate_raw_folds(
-    raw_data_dir: str = "data/raw/pannuke_source",
-    num_synthetic_samples: int = 40,
-) -> Dict[str, str]:
-    """
-    Busca foldN/{images.npy,masks.npy,types.npy} ya descargados en `raw_data_dir`.
-    Si no existen, genera 3 folds sinteticos alli mismo para poder probar el
-    resto del pipeline offline.
-
-    Returns:
-        Dict[str, str]: {"fold1": ruta, "fold2": ruta, "fold3": ruta}
-    """
-    fold_paths = {}
-    all_present = True
-    for fold_name in FOLD_TO_SPLIT:
-        fold_dir = os.path.join(raw_data_dir, fold_name)
-        required = [os.path.join(fold_dir, f) for f in ("images.npy", "masks.npy", "types.npy")]
-        fold_paths[fold_name] = fold_dir
-        if not all(os.path.exists(p) for p in required):
-            all_present = False
-
-    if all_present:
-        print(f"[OK] Folds reales encontrados en '{raw_data_dir}'.")
-        return fold_paths
-
-    print(f"[!] No se encontraron los 3 folds reales en '{raw_data_dir}'.")
-    print("[INFO] Descargalos manualmente desde el TIA Centre (https://warwick.ac.uk/TIA)")
-    print("[INFO] o desde el espejo de Kaggle (requiere cuenta):")
-    print("[INFO]   https://www.kaggle.com/datasets/theredlad/pannuke-dataset-experimental-data")
-    print(f"[INFO] Generando {num_synthetic_samples} muestras SINTETICAS por fold para poder probar el pipeline...")
-
-    for i, fold_name in enumerate(FOLD_TO_SPLIT):
-        fold_dir = fold_paths[fold_name]
-        os.makedirs(fold_dir, exist_ok=True)
-        synthetic = _generate_synthetic_pannuke_fold(num_synthetic_samples, seed=100 + i)
-        np.save(os.path.join(fold_dir, "images.npy"), synthetic["images"])
-        np.save(os.path.join(fold_dir, "masks.npy"), synthetic["masks"])
-        np.save(os.path.join(fold_dir, "types.npy"), synthetic["types"])
-        print(f"  -> '{fold_name}' sintetico generado en '{fold_dir}'.")
-
-    return fold_paths
+DATA_DIR = "data"
+SPLIT_DIRS = {"train": "train", "val": "validate", "test": "test"}
+TEST_SPLIT_SEED = 42
+TEST_SPLIT_RATIO = 0.5  # proporcion de "validate" que se mueve a "test"
 
 
 # =============================================================================
-# SECCION 2: ESTRUCTURACION - CONVERTIR .npy A images/ + masks/ (PNG INDEXADO)
+# SECCION 1: GENERAR EL SPLIT DE TEST (FALTANTE) A PARTIR DE VALIDATE
 # =============================================================================
 
-def convert_pannuke_mask_to_indexed(mask_6ch: np.ndarray) -> np.ndarray:
+def split_validate_into_val_test(
+    data_dir: str = DATA_DIR,
+    test_ratio: float = TEST_SPLIT_RATIO,
+    seed: int = TEST_SPLIT_SEED,
+) -> None:
     """
-    Convierte una mascara PanNuke (256, 256, 6) en una mascara semantica
-    indexada (256, 256) con valores 0-5 (0=Fondo, 1-5=clases).
-
-    Los canales 0-4 de PanNuke codifican ID de instancia por clase (0 = sin
-    nucleo); aqui solo nos importa "hay nucleo de esta clase o no" (semantica,
-    no instancia), asi que cualquier valor > 0 se colapsa a la clase.
+    El mirror descargado solo trae train/ y validate/ (sin test/). Aqui se
+    separa la mitad de validate/ (elegida al azar con semilla fija, para que
+    el split sea reproducible) y se MUEVE a test/, dejando la otra mitad en
+    validate/. Es idempotente: si test/ ya existe y tiene archivos, no hace
+    nada.
     """
-    h, w = mask_6ch.shape[:2]
-    indexed = np.zeros((h, w), dtype=np.uint8)
-    for class_channel in range(5):
-        indexed[mask_6ch[:, :, class_channel] > 0] = class_channel + 1
-    return indexed
+    val_images_dir = os.path.join(data_dir, "validate", "images")
+    val_masks_dir = os.path.join(data_dir, "validate", "masks")
+    test_images_dir = os.path.join(data_dir, "test", "images")
+    test_masks_dir = os.path.join(data_dir, "test", "masks")
 
+    if os.path.isdir(test_images_dir) and len(os.listdir(test_images_dir)) > 0:
+        print("[OK] 'data/test' ya existe, se omite el split de validate.")
+        return
 
-def structure_pannuke_folds(
-    fold_paths: Dict[str, str],
-    output_dir: str = "data/raw/pannuke_formatted",
-) -> Dict[str, Tuple[str, str]]:
-    """
-    Convierte cada fold de .npy a PNGs organizados como:
-        output_dir/<split>/images/*.png   (RGB)
-        output_dir/<split>/masks/*.png    (escala de grises, valores 0-5)
-    respetando el split oficial (fold1=train, fold2=val, fold3=test), a
-    diferencia del split aleatorio 80/10/10 que usa 05 para DSB2018.
+    filenames = sorted(os.path.basename(p) for p in glob.glob(os.path.join(val_images_dir, "*.png")))
+    if not filenames:
+        raise RuntimeError(f"No se encontraron imagenes en '{val_images_dir}'.")
 
-    Returns:
-        Dict[str, Tuple[str, str]]: {"train": (images_dir, masks_dir), ...}
-    """
-    split_dirs = {}
+    rng = random.Random(seed)
+    rng.shuffle(filenames)
+    n_test = int(len(filenames) * test_ratio)
+    test_filenames = set(filenames[:n_test])
 
-    for fold_name, split_name in FOLD_TO_SPLIT.items():
-        fold_dir = fold_paths[fold_name]
-        images_npy = np.load(os.path.join(fold_dir, "images.npy"))
-        masks_npy = np.load(os.path.join(fold_dir, "masks.npy"))
+    os.makedirs(test_images_dir, exist_ok=True)
+    os.makedirs(test_masks_dir, exist_ok=True)
 
-        images_out = os.path.join(output_dir, split_name, "images")
-        masks_out = os.path.join(output_dir, split_name, "masks")
-        os.makedirs(images_out, exist_ok=True)
-        os.makedirs(masks_out, exist_ok=True)
+    print(f"[INFO] Moviendo {len(test_filenames)}/{len(filenames)} pares de 'validate' a 'test'...")
+    for fname in test_filenames:
+        os.replace(os.path.join(val_images_dir, fname), os.path.join(test_images_dir, fname))
+        os.replace(os.path.join(val_masks_dir, fname), os.path.join(test_masks_dir, fname))
 
-        print(f"[INFO] Estructurando {fold_name} -> '{split_name}' ({len(images_npy)} parches)...")
-        for i in range(len(images_npy)):
-            img = images_npy[i].astype(np.uint8)
-            indexed_mask = convert_pannuke_mask_to_indexed(masks_npy[i])
-
-            sample_name = f"{fold_name}_{i:05d}.png"
-            Image.fromarray(img).save(os.path.join(images_out, sample_name))
-            Image.fromarray(indexed_mask, mode="L").save(os.path.join(masks_out, sample_name))
-
-        split_dirs[split_name] = (images_out, masks_out)
-        print(f"  -> '{split_name}' listo en '{images_out}' / '{masks_out}'.")
-
-    return split_dirs
+    print(f"[OK] 'test' listo con {len(test_filenames)} pares; 'validate' quedo con {len(filenames) - len(test_filenames)}.")
 
 
 # =============================================================================
-# SECCION 3: VALIDACION + REPORTE DE DISTRIBUCION DE CLASES (DESBALANCE)
+# SECCION 2: VALIDACION + REPORTE DE BALANCE NUCLEO/FONDO
 # =============================================================================
 
-def validate_and_report_classes(split_dirs: Dict[str, Tuple[str, str]]) -> Dict[str, Any]:
+def validate_and_report_splits(data_dir: str = DATA_DIR) -> Dict[str, Dict]:
     """
-    Verifica emparejamiento imagen-mascara y reporta la distribucion de
-    pixeles por clase en el split de entrenamiento, para detectar el
-    desbalance entre clases (p. ej. 'Muerto' suele ser mucho mas raro que
-    'Neoplasico').
+    Verifica emparejamiento imagen-mascara por split y reporta el porcentaje
+    de pixeles de nucleo vs fondo en train, para detectar el desbalance de
+    clases tipico en segmentacion de nucleos (el fondo domina la imagen).
     """
     print("\n" + "=" * 60)
-    print(" REPORTE DE VALIDACION Y DISTRIBUCION DE CLASES (PanNuke)")
+    print(" REPORTE DE VALIDACION (PanNuke binario)")
     print("=" * 60)
 
-    class_pixel_counts = np.zeros(NUM_CLASSES, dtype=np.int64)
-    report: Dict[str, Any] = {}
+    report: Dict[str, Dict] = {}
+    nucleus_px = 0
+    total_px = 0
 
-    for split_name, (images_dir, masks_dir) in split_dirs.items():
+    for split_key, folder in SPLIT_DIRS.items():
+        images_dir = os.path.join(data_dir, folder, "images")
+        masks_dir = os.path.join(data_dir, folder, "masks")
         img_paths = sorted(glob.glob(os.path.join(images_dir, "*.png")))
         mask_paths = sorted(glob.glob(os.path.join(masks_dir, "*.png")))
         matched = len(img_paths) == len(mask_paths) and len(img_paths) > 0
-        report[split_name] = {"num_samples": len(img_paths), "matched": matched}
-        print(f"  - {split_name:5s}: {len(img_paths)} muestras | pares OK: {matched}")
+        report[split_key] = {"num_samples": len(img_paths), "matched": matched}
+        print(f"  - {split_key:5s}: {len(img_paths)} muestras | pares OK: {matched}")
 
-        if split_name == "train":
+        if split_key == "train":
             for mp in mask_paths:
-                mask_arr = np.array(Image.open(mp))
-                counts = np.bincount(mask_arr.ravel(), minlength=NUM_CLASSES)
-                class_pixel_counts += counts[:NUM_CLASSES]
+                arr = np.array(Image.open(mp))
+                nucleus_px += int((arr > 0).sum())
+                total_px += arr.size
 
-    total_px = class_pixel_counts.sum()
-    print("\n  Distribucion de pixeles por clase (split train):")
-    for idx, name in enumerate(CLASS_NAMES):
-        pct = 100.0 * class_pixel_counts[idx] / total_px if total_px > 0 else 0.0
-        print(f"    [{idx}] {name:12s}: {pct:6.2f}%")
+    pct_nucleus = 100.0 * nucleus_px / total_px if total_px > 0 else 0.0
+    print("\n  Distribucion de pixeles (split train):")
+    print(f"    Fondo : {100 - pct_nucleus:6.2f}%")
+    print(f"    Nucleo: {pct_nucleus:6.2f}%")
     print("=" * 60 + "\n")
 
-    report["class_pixel_counts"] = class_pixel_counts.tolist()
+    report["pct_nucleus_train"] = pct_nucleus
     return report
 
 
 # =============================================================================
-# SECCION 4: DATASET Y DATALOADERS MULTICLASE
+# SECCION 3: DATASET Y DATALOADERS (SEGMENTACION BINARIA)
 # =============================================================================
 
-class PanNukeSegmentationDataset(Dataset):
+class PanNukeBinarySegmentationDataset(Dataset):
     """
-    Analogo a `BioImageSegmentationDataset` (script 05), pero preserva las
-    6 clases en vez de binarizar. La mascara se devuelve como LongTensor
-    de indices de clase (H, W): el formato que espera `nn.CrossEntropyLoss`,
-    no un FloatTensor (1, H, W) tipo `BCEWithLogitsLoss`.
+    Dataset de segmentacion binaria: nucleo (1) vs fondo (0). La mascara se
+    devuelve como FloatTensor (1, H, W) en [0, 1], el formato que espera
+    `nn.BCEWithLogitsLoss` (a diferencia de una mascara multiclase de
+    indices para `nn.CrossEntropyLoss`).
     """
 
     def __init__(
@@ -269,7 +168,7 @@ class PanNukeSegmentationDataset(Dataset):
         return len(self.image_paths)
 
     def _apply_synchronous_transforms(self, image_np: np.ndarray, mask_np: np.ndarray):
-        """Mismas transformaciones que 05: flips + rotaciones de 90 grados, sincronizadas."""
+        """Flips + rotaciones de 90 grados, sincronizadas entre imagen y mascara."""
         if random.random() > 0.5:
             image_np = np.fliplr(image_np)
             mask_np = np.fliplr(mask_np)
@@ -284,37 +183,35 @@ class PanNukeSegmentationDataset(Dataset):
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
         img_pil = Image.open(self.image_paths[idx]).convert("RGB")
-        mask_pil = Image.open(self.mask_paths[idx]).convert("L")  # 1 canal, valores 0-5
+        mask_pil = Image.open(self.mask_paths[idx]).convert("L")
 
         img_pil = img_pil.resize(self.target_size, Image.BILINEAR)
-        mask_pil = mask_pil.resize(self.target_size, Image.NEAREST)  # NEAREST: nunca inventar clases nuevas
+        mask_pil = mask_pil.resize(self.target_size, Image.NEAREST)
 
         img_np = np.array(img_pil, dtype=np.float32) / 255.0
-        mask_np = np.array(mask_pil, dtype=np.int64)  # indices de clase, NO binarizar
+        mask_np = (np.array(mask_pil) > 0).astype(np.float32)  # binarizar: 0/1
 
         if self.transform:
             img_np, mask_np = self._apply_synchronous_transforms(img_np, mask_np)
 
-        img_tensor = torch.from_numpy(img_np).permute(2, 0, 1)  # (3, H, W) float
-        mask_tensor = torch.from_numpy(mask_np).long()          # (H, W) long -> listo para CrossEntropyLoss
+        img_tensor = torch.from_numpy(img_np).permute(2, 0, 1)      # (3, H, W) float
+        mask_tensor = torch.from_numpy(mask_np).unsqueeze(0)        # (1, H, W) float -> BCEWithLogitsLoss
 
         return img_tensor, mask_tensor
 
 
 def create_pannuke_dataloaders(
-    split_dirs: Dict[str, Tuple[str, str]],
+    data_dir: str = DATA_DIR,
     batch_size: int = 8,
 ) -> Tuple[DataLoader, DataLoader, DataLoader]:
-    """
-    A diferencia de `create_dataloaders()` de 05 (split aleatorio 80/10/10),
-    aqui el split ya viene fijado por los folds oficiales de PanNuke.
-    """
     datasets = {}
-    for split_name, (images_dir, masks_dir) in split_dirs.items():
+    for split_key, folder in SPLIT_DIRS.items():
+        images_dir = os.path.join(data_dir, folder, "images")
+        masks_dir = os.path.join(data_dir, folder, "masks")
         img_paths = sorted(glob.glob(os.path.join(images_dir, "*.png")))
         mask_paths = sorted(glob.glob(os.path.join(masks_dir, "*.png")))
-        datasets[split_name] = PanNukeSegmentationDataset(
-            img_paths, mask_paths, transform=(split_name == "train")
+        datasets[split_key] = PanNukeBinarySegmentationDataset(
+            img_paths, mask_paths, transform=(split_key == "train")
         )
 
     train_loader = DataLoader(datasets["train"], batch_size=batch_size, shuffle=True)
@@ -329,21 +226,20 @@ def create_pannuke_dataloaders(
 
 if __name__ == "__main__":
     print("=================================================================")
-    print(" DLBA - SCRIPT 07: PREPROCESAMIENTO PANNUKE (MULTICLASE) ")
+    print(" PREPROCESAMIENTO PANNUKE (BINARIO: NUCLEO VS FONDO) ")
     print("=================================================================")
 
-    fold_paths = locate_or_generate_raw_folds()
-    split_dirs = structure_pannuke_folds(fold_paths)
-    validate_and_report_classes(split_dirs)
+    split_validate_into_val_test()
+    validate_and_report_splits()
 
-    print("[INFO] Construyendo DataLoaders (split oficial fold1/fold2/fold3)...")
-    train_loader, val_loader, test_loader = create_pannuke_dataloaders(split_dirs, batch_size=8)
+    print("[INFO] Construyendo DataLoaders (train/validate/test)...")
+    train_loader, val_loader, test_loader = create_pannuke_dataloaders(batch_size=8)
 
     images, masks = next(iter(train_loader))
     print(f"\n[OK] Batch de entrenamiento cargado:")
     print(f"     Imagen : {tuple(images.shape)}, dtype={images.dtype}")
-    print(f"     Mascara: {tuple(masks.shape)}, dtype={masks.dtype}, clases presentes: {torch.unique(masks).tolist()}")
+    print(f"     Mascara: {tuple(masks.shape)}, dtype={masks.dtype}, valores unicos: {torch.unique(masks).tolist()}")
 
-    print("\n[OK] Script 07 completado.")
-    print("     Para entrenar: UNet(in_channels=3, out_channels=6) + nn.CrossEntropyLoss()")
-    print("     en vez de BCEWithLogitsLoss + DiceLoss binaria (ver 04_unet_segmentation.py).")
+    print("\n[OK] Preprocesamiento completado.")
+    print("     Para entrenar: UNet(in_channels=3, out_channels=1) + nn.BCEWithLogitsLoss()")
+    print("     (segmentacion binaria: sin distincion de tipo de nucleo).")
