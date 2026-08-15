@@ -1,0 +1,28 @@
+name: dlba
+channels:
+  - conda-forge
+dependencies:
+  - python>=3.10
+  - numpy>=1.22.0
+  - scipy>=1.8.0
+  - scikit-image>=0.19.0
+  - matplotlib>=3.5.0
+  - zarr>=2.12.0
+  - tifffile>=2022.5.4
+  - pooch>=1.6.0
+  - tiffslide>=2.0.0
+  - napari[all]
+  - pyqt6
+  - pillow>=10.0.0
+  - pip
+  - pip:
+    # PyTorch: lo usan 04_unet_segmentation.py, preprocesamiento_binario.py
+    # y entrenar_unet_pannuke.py, pero no estaba declarado en el repo
+    # original. Esto instala la version CPU por defecto; para GPU con
+    # CUDA, usa el selector de comando de https://pytorch.org/get-started/locally/
+    - torch>=2.0.0
+    # Kaggle CLI: usado por descargar_pannuke.py para bajar el dataset.
+    # Recuerda correr 'kaggle auth login' una vez despues de instalar.
+    - kaggle>=2.0.0
+    # Optional: pyvips can be installed via pip (requires libvips C library installed on system)
+    # - pyvips>=2.2.0

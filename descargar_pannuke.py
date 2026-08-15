@@ -1,125 +1,105 @@
 """
 ===============================================================================
-SCRIPT: DESCARGA AUTOMATICA DEL DATASET PANNUKE DESDE KAGGLE
+DESCARGA DEL DATASET PANNUKE DESDE KAGGLE (llwlabs/pannuke)
 ===============================================================================
-Descarga el dataset "PanNuke Dataset (Experimental Data)" de Kaggle
-(https://www.kaggle.com/datasets/theredlad/pannuke-dataset-experimental-data),
-lo descomprime y reorganiza los archivos en la estructura que espera
-`preprosesamiento.py`:
+Descarga el mirror de PanNuke usando el CLI oficial de Kaggle (paquete
+'kaggle', v2.x). A diferencia de 06_dataset_download_and_structuring.py
+(que usa pooch para descargas publicas sin autenticacion), Kaggle requiere
+una cuenta.
 
-    data/raw/pannuke_source/fold1/{images.npy, masks.npy, types.npy}
-    data/raw/pannuke_source/fold2/{images.npy, masks.npy, types.npy}
-    data/raw/pannuke_source/fold3/{images.npy, masks.npy, types.npy}
+REQUISITO PREVIO -- autenticarte con Kaggle (una sola vez, desde la terminal):
 
-REQUISITOS:
-  1. pip install kaggle
-  2. Completa tus credenciales de Kaggle en KAGGLE_USERNAME y KAGGLE_KEY
-     mas abajo (Settings -> API -> "Create New Token" en kaggle.com genera
-     un kaggle.json con ambos valores).
+    kaggle auth login
 
-USO:
-  python descargar_pannuke.py
+Esto abre el navegador para iniciar sesion con tu cuenta de Kaggle y guarda
+las credenciales localmente; no hace falta manejar ningun archivo a mano.
+(El metodo clasico con token -- Kaggle -> Settings -> API -> "Create New
+Token", guardado como kaggle.json -- sigue funcionando como alternativa
+"Legacy" si el login por navegador no te sirve.)
+
+Instalar el paquete: pip install kaggle
+
+NOTA sobre el notebook de Kaggle que mencionaste: si ese notebook corre
+DENTRO de Kaggle (un "Kaggle Notebook"/kernel), ahi los datos ya vienen
+montados en /kaggle/input/ sin necesidad de descargar nada -- ese patron
+no aplica en tu maquina local. Este script es el equivalente para correr
+fuera de Kaggle, en tu propio entorno.
 ===============================================================================
 """
 
 import os
-import re
 import shutil
-import zipfile
+import subprocess
+import sys
 
-# =============================================================================
-# CREDENCIALES DE KAGGLE (COMPLETAR ANTES DE EJECUTAR)
-# =============================================================================
-KAGGLE_USERNAME = ""
-KAGGLE_KEY = ""
-
-DATASET_SLUG = "theredlad/pannuke-dataset-experimental-data"
-DOWNLOAD_DIR = "data/raw/pannuke_download"
-EXTRACT_DIR = "data/raw/pannuke_extracted"
-RAW_DATA_DIR = "data/raw/pannuke_source"
+DATASET_SLUG = "llwlabs/pannuke"
+DOWNLOAD_DIR = "data/raw_download"
 
 
-def _configurar_credenciales() -> None:
-    if not KAGGLE_USERNAME or not KAGGLE_KEY:
-        raise RuntimeError(
-            "Completa KAGGLE_USERNAME y KAGGLE_KEY al inicio de este script "
-            "con los datos de tu token de Kaggle (Account -> Create New Token)."
-        )
-    os.environ["KAGGLE_USERNAME"] = KAGGLE_USERNAME
-    os.environ["KAGGLE_KEY"] = KAGGLE_KEY
+def descargar_dataset(dataset_slug: str = DATASET_SLUG, destino: str = DOWNLOAD_DIR) -> bool:
+    """Descarga y descomprime el dataset de Kaggle via el CLI. Devuelve
+    True si salio bien, False si fallo (verificado: Kaggle responde con
+    '403 Forbidden' cuando falta autenticacion, no un error de red)."""
+    kaggle_exe = shutil.which("kaggle")
+    if kaggle_exe is None:
+        print("[!] No se encontro el ejecutable 'kaggle' en el PATH.")
+        print("[INFO] Verifica que 'pip install kaggle' haya terminado sin errores,")
+        print("[INFO] y que estes en el mismo entorno/terminal donde lo instalaste.")
+        return False
+
+    os.makedirs(destino, exist_ok=True)
+    print(f"[INFO] Descargando '{dataset_slug}' hacia '{destino}'...")
+
+    # En Windows, subprocess.run(["kaggle", ...]) sin resolver la ruta completa
+    # primero puede fallar con FileNotFoundError aunque 'kaggle' funcione bien
+    # escrito directo en la terminal -- por eso se usa kaggle_exe (ruta completa
+    # resuelta por shutil.which) en vez del string "kaggle" suelto.
+    resultado = subprocess.run(
+        [kaggle_exe, "datasets", "download", dataset_slug, "-p", destino, "--unzip"],
+        capture_output=True, text=True,
+    )
+    salida = (resultado.stdout + resultado.stderr).strip()
+
+    if resultado.returncode != 0:
+        print("[!] La descarga fallo.")
+        print(" ", salida)
+        if "403" in salida or "forbidden" in salida.lower() or "auth" in salida.lower():
+            print()
+            print("[INFO] Es un problema de autenticacion. Corre esto una sola")
+            print("[INFO] vez en la terminal y vuelve a correr este script:")
+            print("[INFO]     kaggle auth login")
+        return False
+
+    print(f"[OK] Dataset descargado y descomprimido en '{destino}'.")
+    return True
 
 
-def descargar_dataset() -> str:
-    """Descarga el .zip del dataset usando la API de Kaggle. Devuelve la ruta del .zip."""
-    _configurar_credenciales()
-    from kaggle.api.kaggle_api_extended import KaggleApi  # import tardio: necesita las env vars ya seteadas
-
-    os.makedirs(DOWNLOAD_DIR, exist_ok=True)
-
-    api = KaggleApi()
-    api.authenticate()
-
-    print(f"[INFO] Descargando '{DATASET_SLUG}' desde Kaggle...")
-    api.dataset_download_files(DATASET_SLUG, path=DOWNLOAD_DIR, unzip=False, quiet=False)
-
-    zip_candidates = [f for f in os.listdir(DOWNLOAD_DIR) if f.endswith(".zip")]
-    if not zip_candidates:
-        raise RuntimeError(f"No se encontro ningun .zip descargado en '{DOWNLOAD_DIR}'.")
-
-    zip_path = os.path.join(DOWNLOAD_DIR, zip_candidates[0])
-    print(f"[OK] Descargado: {zip_path}")
-    return zip_path
-
-
-def descomprimir(zip_path: str) -> None:
-    print(f"[INFO] Descomprimiendo en '{EXTRACT_DIR}'...")
-    os.makedirs(EXTRACT_DIR, exist_ok=True)
-    with zipfile.ZipFile(zip_path, "r") as zf:
-        zf.extractall(EXTRACT_DIR)
-    print("[OK] Descompresion completa.")
-
-
-def reorganizar_folds() -> None:
-    """
-    El .zip oficial de PanNuke trae cada fold en subcarpetas anidadas del
-    estilo 'Fold 1/images/fold1/images.npy', 'Fold 1/masks/fold1/masks.npy',
-    etc. Aqui se localizan los 3 archivos .npy de cada fold (sin importar
-    como esten anidados) y se copian a la estructura plana
-    data/raw/pannuke_source/foldN/ que espera preprosesamiento.py.
-    """
-    print(f"[INFO] Reorganizando folds en '{RAW_DATA_DIR}'...")
-    fold_pattern = re.compile(r"fold[\s_-]?([123])", re.IGNORECASE)
-
-    encontrados = {"1": {}, "2": {}, "3": {}}
-    for root, _dirs, files in os.walk(EXTRACT_DIR):
-        for filename in files:
-            if filename not in ("images.npy", "masks.npy", "types.npy"):
-                continue
-            full_path = os.path.join(root, filename)
-            match = fold_pattern.search(full_path)
-            if not match:
-                continue
-            fold_num = match.group(1)
-            clave = filename.replace(".npy", "")
-            encontrados[fold_num][clave] = full_path
-
-    for fold_num, archivos in encontrados.items():
-        faltantes = {"images", "masks", "types"} - archivos.keys()
-        if faltantes:
-            print(f"[!] fold{fold_num}: faltan archivos {faltantes}, se omite.")
-            continue
-
-        fold_dir = os.path.join(RAW_DATA_DIR, f"fold{fold_num}")
-        os.makedirs(fold_dir, exist_ok=True)
-        for clave, origen in archivos.items():
-            destino = os.path.join(fold_dir, f"{clave}.npy")
-            shutil.copyfile(origen, destino)
-        print(f"  -> fold{fold_num} listo en '{fold_dir}'.")
+def listar_contenido(destino: str = DOWNLOAD_DIR, max_items: int = 20) -> None:
+    """Muestra el contenido de primer nivel del resultado, para confirmar
+    a simple vista si la estructura es train/validate con images/masks."""
+    if not os.path.isdir(destino):
+        return
+    print(f"\n[INFO] Contenido de '{destino}' (primeros {max_items}):")
+    for i, nombre in enumerate(sorted(os.listdir(destino))):
+        if i >= max_items:
+            print("  ...")
+            break
+        ruta = os.path.join(destino, nombre)
+        tipo = "carpeta" if os.path.isdir(ruta) else "archivo"
+        print(f"  [{tipo}] {nombre}")
 
 
 if __name__ == "__main__":
-    zip_path = descargar_dataset()
-    descomprimir(zip_path)
-    reorganizar_folds()
-    print("\n[OK] Dataset PanNuke listo. Ahora puedes correr:")
-    print("     python preprosesamiento.py")
+    print("=================================================================")
+    print(" DESCARGA DE PANNUKE (llwlabs/pannuke) DESDE KAGGLE ")
+    print("=================================================================")
+
+    ok = descargar_dataset()
+    if not ok:
+        sys.exit(1)
+
+    listar_contenido()
+
+    print("\n[OK] Listo. Compara esta estructura contra lo que espera")
+    print("     preprocesamiento_binario.py (train/images, train/masks,")
+    print("     validate/images, validate/masks) y ajusta rutas si no calzan.")
