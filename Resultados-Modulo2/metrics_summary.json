@@ -1,0 +1,10 @@
+{
+  "device": "cuda",
+  "train_time_minutes": 105.3,
+  "test_metrics": {
+    "dice": 0.8283,
+    "iou": 0.7228
+  },
+  "baseline_model_h5_metrics": null,
+  "note": "baseline vs model.h5 omitido por error de compatibilidad Conv2DTranspose (groups=1) con Keras 3"
+}
