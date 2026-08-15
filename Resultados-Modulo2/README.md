@@ -1,5 +1,15 @@
 # Resultados del Módulo 2 — Segmentación binaria de núcleos con U-Net (PanNuke)
 
+## Equipo
+
+| Integrante | Participación |
+|---|---|
+| Divano Perez | 100% |
+| Jorge Vicente | 100% |
+| Angel Sánchez | 100% |
+| Alfredo Sánchez | 100% |
+| Yulissa Pelaez | 100% |
+
 ## Propósito de esta carpeta
 
 Esta carpeta contiene los resultados de una ejecución completa del pipeline de
