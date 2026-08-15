@@ -1,60 +1,94 @@
-# Resultados — Módulo 2 (segmentación binaria de núcleos, U-Net)
+# Resultados del Módulo 2 — Segmentación binaria de núcleos con U-Net (PanNuke)
 
-Esta carpeta contiene los **artefactos ya generados** de una corrida completa de
+## Propósito de esta carpeta
+
+Esta carpeta contiene los resultados de una ejecución completa del pipeline de
+entrenamiento y evaluación del Módulo 2, correspondiente a la tarea de
+segmentación semántica binaria de núcleos celulares sobre el conjunto de datos
+PanNuke. Los artefactos aquí presentes fueron generados por el script
 [`modulo2_pannuke_binary_segmentation.py`](../modulo2_pannuke_binary_segmentation.py)
-(15 épocas, ~105 min en GPU). No hace falta volver a entrenar para revisarlos.
+y constituyen evidencia directa del comportamiento del modelo entrenado; no es
+necesario volver a ejecutar el entrenamiento para revisarlos o evaluarlos.
 
-## Contenido
+## Contenido de la carpeta
 
-| Archivo | Qué es |
+| Archivo | Descripción |
 |---|---|
-| `metrics_summary.json` | Dice/IoU finales sobre el set de test, tiempo de entrenamiento, device usado |
-| `training_history.png` | Curva de pérdida/métrica por época |
-| `qualitative_predictions.png` | Ejemplos: imagen H&E, máscara real, probabilidad predicha, predicción binaria |
-| `notebook1445a8ba31.ipynb` | Notebook (pensado para Kaggle) que corrió el script y volcó estas salidas |
+| `metrics_summary.json` | Resumen cuantitativo de la corrida: métricas finales de test (Dice, IoU), dispositivo de cómputo utilizado y tiempo total de entrenamiento. |
+| `training_history.png` | Curva de evolución de la función de pérdida y las métricas de validación a lo largo de las épocas de entrenamiento. |
+| `qualitative_predictions.png` | Panel comparativo con ejemplos representativos: imagen de entrada (H&E), máscara de referencia, mapa de probabilidad predicho y predicción binarizada. |
+| `notebook1445a8ba31.ipynb` | Notebook de ejecución (preparado para el entorno Kaggle) que orquestó la corrida y produjo los artefactos anteriores. |
 
-Resultado de esta corrida: **Dice 0.8283 / IoU 0.7228** (ver `metrics_summary.json`).
-La comparación contra el baseline `model.h5` se omitió por incompatibilidad de
-`Conv2DTranspose` entre el `.h5` original y Keras 3.
+## Resumen de resultados
 
-## Cómo ver los resultados (sin ejecutar nada)
+| Métrica | Valor |
+|---|---|
+| Dice (test) | 0.8283 |
+| IoU (test) | 0.7228 |
+| Épocas de entrenamiento | 15 |
+| Tiempo de entrenamiento | ≈ 105.3 min (GPU) |
 
-Los PNG y el JSON son archivos estáticos, ábrelos directo:
+La comparación cuantitativa contra el modelo de referencia (`model.h5`) no pudo
+realizarse en esta corrida por una incompatibilidad entre la capa
+`Conv2DTranspose` del modelo `.h5` original y la versión de Keras 3 utilizada;
+esta condición queda registrada en el campo `note` de `metrics_summary.json`.
 
-```bash
-start Resultados-Modulo2\training_history.png
-start Resultados-Modulo2\qualitative_predictions.png
-```
+## Cómo revisar los resultados
 
-`metrics_summary.json` se abre con cualquier editor de texto.
+Dado que el objetivo es la revisión de resultados ya obtenidos y no la
+reproducción del entrenamiento, basta con consultar directamente los archivos
+estáticos incluidos en esta carpeta:
 
-## Sobre napari: no hace falta para esto
+- `metrics_summary.json` puede abrirse con cualquier editor de texto.
+- `training_history.png` y `qualitative_predictions.png` pueden abrirse con
+  cualquier visor de imágenes.
 
-`environment.yml` instala `napari[all]`, pero **no es un requisito para ver ni para
-generar estos resultados**. napari solo se usa dentro de
-[`05_dataset_exploration_and_dataloaders.py`](../05_dataset_exploration_and_dataloaders.py)
-(función `visualize_batch_in_napari`), como visor interactivo *opcional* al correr ese
-script suelto para explorar el dataset crudo — con fallback automático si no hay GUI.
+No se requiere entorno de Python, Jupyter ni GPU para esta revisión.
 
-El script que sí generó esta carpeta evita a propósito importar napari a nivel de
-módulo (ver el comentario en la cabecera del script) para no forzar esa dependencia.
-Las imágenes de esta carpeta se generaron con matplotlib en backend `Agg` (sin GUI) y
-se guardaron directo a disco.
+## Nota sobre la dependencia `napari`
 
-## Si quieres abrir el notebook igual (sin re-entrenar)
+El archivo `environment.yml` del proyecto incluye `napari[all]` como
+dependencia, pero esta librería **no interviene en la generación ni en la
+visualización de los resultados de esta carpeta**. Su único uso dentro del
+proyecto es como visor interactivo opcional del conjunto de datos crudo,
+implementado en la función `visualize_batch_in_napari` de
+[`05_dataset_exploration_and_dataloaders.py`](../05_dataset_exploration_and_dataloaders.py),
+con reversión automática a modo no interactivo cuando no hay entorno gráfico
+disponible.
 
-El notebook está armado para Kaggle, con `%%writefile` de los scripts y una celda que
-lanza el entrenamiento (celdas 10–11: `EPOCHS = 15`, `!{" ".join(cmd)}`). Para
-inspeccionarlo sin pagar esas ~8000 s/época de nuevo:
+El script que produjo los artefactos de esta carpeta evita deliberadamente la
+importación de `napari` a nivel de módulo, precisamente para no introducir esa
+dependencia en el flujo de entrenamiento y evaluación (véase el comentario
+correspondiente en la cabecera del script). Las figuras se generaron con
+`matplotlib` en modo no interactivo (backend `Agg`) y se guardaron
+directamente a disco.
 
-1. Activa el entorno conda del curso: `conda env create -f ../environment.yml` (una
-   vez) y luego `conda activate dlba`. Solo necesario para abrir/ejecutar celdas del
-   notebook, no para ver los PNG/JSON de arriba.
-2. Abre `notebook1445a8ba31.ipynb` en Jupyter/VS Code.
-3. **No ejecutes las celdas 10 y 11** (son las que entrenan). Ve directo a las celdas
-   14–15 ("Revisar resultados"): leen `metrics_summary.json` y muestran los PNG — pero
-   asumen las rutas de Kaggle (`/kaggle/working/outputs_modulo2_pannuke`), así que si
-   las corres localmente cambia `OUTPUT_DIR` a esta carpeta (`Resultados-Modulo2`).
-4. La celda 16 (grilla de 8 predicciones cualitativas) sí necesita `best_model.pt`
-   cargado, que **no está incluido en esta carpeta** — esa celda no se puede reproducir
-   sin volver a entrenar o sin tener ese checkpoint a mano.
+## Instrucciones opcionales para reabrir el notebook
+
+La reproducción íntegra del notebook no es necesaria para interpretar los
+resultados aquí incluidos; se documenta a continuación únicamente como
+referencia, para quien desee inspeccionar el proceso de ejecución sin
+reentrenar el modelo (el reentrenamiento completo insume aproximadamente
+8000 segundos por época en el hardware disponible).
+
+1. Crear y activar el entorno del curso una única vez:
+
+   ```bash
+   conda env create -f ../environment.yml
+   conda activate dlba
+   ```
+
+2. Abrir `notebook1445a8ba31.ipynb` en Jupyter o en un editor compatible
+   (por ejemplo, Visual Studio Code).
+3. Omitir la ejecución de las celdas 10 y 11, correspondientes al lanzamiento
+   del entrenamiento (`EPOCHS = 15` y la llamada al script principal).
+4. Ejecutar directamente las celdas 14 y 15 ("Revisar resultados"), que leen
+   `metrics_summary.json` y muestran las figuras generadas. Estas celdas
+   asumen las rutas del entorno Kaggle
+   (`/kaggle/working/outputs_modulo2_pannuke`); para ejecutarlas localmente
+   debe redefinirse `OUTPUT_DIR` apuntando a esta carpeta
+   (`Resultados-Modulo2`).
+5. La celda 16, que reconstruye una grilla adicional de ocho predicciones
+   cualitativas, requiere cargar el checkpoint `best_model.pt`, el cual **no
+   está incluido en esta carpeta**. Dicha celda no puede reproducirse sin
+   dicho archivo o sin repetir el entrenamiento.
