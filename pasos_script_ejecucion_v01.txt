@@ -1,0 +1,51 @@
+Pasos del script modulo2_pannuke_binary_segmentation.py
+
+Flujo completo, paso a paso
+
+Antes de correr el script (una sola vez, preparación del entorno):
+
+1. Activar el entorno: conda activate dlba
+2. Instalar lo que falta (no está en environment.yml del curso): pip install torch
+3. (Solo si NO tienes dataset/ ya descargado): pip install kaggle + kaggle auth login
+
+Al correr python modulo2_pannuke_binary_segmentation.py, por dentro pasa esto, en este orden:
+
+1. Elegir dispositivo
+   └─ ¿Hay GPU? → usar GPU. Si no → usar CPU. (automático, sin que hagas nada)
+
+2. Resolver el dataset
+   └─ ¿Ya existe dataset/train/images y dataset/validate/images?
+        Sí → usarlo tal cual, no descarga nada
+        No → descargarlo solo desde Kaggle (llwlabs/pannuke) y descomprimirlo
+
+3. Cargar los datos (AQUÍ es cuando se importa 05_dataset_exploration_and_dataloaders.py)
+   └─ Arma 3 grupos: Train (90% de train/) / Val (10% de train/) / Test (validate/ completo)
+   └─ Crea los DataLoaders (con volteos/rotaciones aleatorias solo en Train)
+
+4. Construir el modelo
+   └─ Arma la U-Net (Encoder → Bottleneck → Decoder con skip connections)
+
+5. Entrenar (se repite por cada época)
+   └─ Pasa las imágenes de Train por la red, calcula el error (BCE + Dice), ajusta la red
+   └─ Revisa qué tan bien va con Val (sin ajustar nada, solo mide)
+   └─ Si es la mejor época hasta ahora, guarda el modelo (best_model.pt)
+
+6. Evaluar de verdad
+   └─ Corre el modelo ya entrenado sobre Test (nunca visto antes)
+   └─ Calcula Dice e IoU finales
+
+7. Guardar resultados visuales
+   └─ Gráfico de cómo bajó el error por época (training_history.png)
+   └─ Ejemplos de imagen / máscara real / predicción (qualitative_predictions.png)
+
+8. (Opcional) Comparar contra el modelo ya entrenado que venía incluido (model.h5)
+   └─ Solo si tienes TensorFlow instalado; si no, se salta con un aviso
+
+9. Guardar el resumen final
+   └─ metrics_summary.json con todos los números (hiperparámetros, historial, métricas)
+
+Resultado, todo dentro de outputs_modulo2_pannuke/:
+- best_model.pt (el modelo entrenado)
+- training_history.png
+- qualitative_predictions.png
+- metrics_summary.json

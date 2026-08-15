@@ -1,0 +1,17 @@
+[INFO] Dispositivo: cpu
+[INFO] Dataset: D:\2026\2026-2\SEMINARIO\dlba-pucp-main\dlba-pucp-main\dataset
+[INFO] Muestras -> train=180 val=20 test=100 (pool total en disco: train/=6716 validate/=1185)
+[INFO] U-Net instanciada -- 31,037,633 parametros entrenables
+[Epoch 001/6] train_loss=0.9958 | val_loss=1.9752 val_dice=0.3020 val_iou=0.1910 (293.4s)
+[Epoch 002/6] train_loss=0.7663 | val_loss=0.7549 val_dice=0.6575 val_iou=0.5194 (318.1s)
+[Epoch 003/6] train_loss=0.6692 | val_loss=1.3810 val_dice=0.4345 val_iou=0.3129 (348.0s)
+[Epoch 004/6] train_loss=0.6238 | val_loss=0.6874 val_dice=0.6561 val_iou=0.5190 (318.5s)
+[Epoch 005/6] train_loss=0.5898 | val_loss=0.7638 val_dice=0.6298 val_iou=0.4879 (280.5s)
+[Epoch 006/6] train_loss=0.5734 | val_loss=0.6080 val_dice=0.6301 val_iou=0.4841 (307.1s)
+[INFO] Entrenamiento completo en 31.1 min. Mejor checkpoint: outputs_modulo2_pannuke\best_model.pt
+[RESULT] Test -- Dice=0.6965 IoU=0.5635 (n=100)
+[INFO] Figuras guardadas: outputs_modulo2_pannuke\training_history.png, outputs_modulo2_pannuke\qualitative_predictions.png
+[INFO] TensorFlow no esta instalado -- se omite la comparacion con el baseline 'D:\2026\2026-2\SEMINARIO\dlba-pucp-main\dlba-pucp-main\dataset\model.h5'. Instala con `pip install tensorflow` para habilitarla.
+[INFO] Resumen de metricas guardado en: outputs_modulo2_pannuke\metrics_summary.json
+
+[OK] Modulo 2 -- Segmentacion binaria PanNuke: pipeline completo ejecutado.
