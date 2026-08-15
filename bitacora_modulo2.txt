@@ -1,0 +1,119 @@
+BITACORA - MODULO 2: SEGMENTACION SEMANTICA (PanNuke)
+Fecha: 2026-08-14
+
+1. DATASET
+   - Elegido: PanNuke (tabla "Datasets para Segmentacion Semantica" de
+     DATASETS_OVERVIEW.md), copia local en dataset/.
+   - Estructura real verificada: dataset/{train,validate}/{images,masks}/
+     (PNG 256x256) + dataset/model.h5 (baseline Keras). Sin .npy, sin
+     types.npy -- distinto del formato "crudo" oficial de PanNuke.
+   - Conteo: train/ 6716 pares + validate/ 1185 pares = 7901 imagenes,
+     coincide con el total oficial de PanNuke (3 folds ya mezclados;
+     el prefijo del archivo "{fold}-{idx}.png" indica el fold de origen).
+
+2. DESCUBRIMIENTO CLAVE: MASCARAS BINARIAS, NO MULTICLASE
+   - Se muestrearon al azar ~600 mascaras (PIL + numpy) en train/ y
+     validate/: el unico conjunto de valores de pixel encontrado fue
+     {0, 255}. No hay informacion de las 5 categorias de nucleo del
+     PanNuke original (Neoplasico, Inflamatorio, Conectivo, Muerto,
+     Epitelial).
+   - Se confirmo con dataset/model.h5 (inspeccionado via h5py): su
+     ultima capa es Conv2D(filters=1, activation='sigmoid') -> el propio
+     baseline incluido tambien es binario.
+   - Conclusion: este paquete de Kaggle ("PanNuke dataset - experimental
+     data", el mismo enlazado en DATASETS_OVERVIEW.md) ya viene colapsado
+     a segmentacion binaria (nucleo vs. fondo) desde su preprocesamiento
+     original; la etiqueta de tipo de nucleo no se puede recuperar de
+     estos PNG.
+
+3. DECISION: SEGMENTACION BINARIA (Opcion A), no multiclase
+   - Se descarta la Opcion B (multiclase) para este dataset porque
+     exigiria descargar el PanNuke crudo oficial (fold1/2/3 en .npy,
+     ~3GB extra), que no se tiene localmente.
+   - Arquitectura: U-Net de 04_unet_segmentation.py (out_channels=1),
+     reimplementada de forma autocontenida en el script del entregable
+     para no heredar la importacion obligatoria de `napari` a nivel de
+     modulo que tiene ese archivo.
+   - Dataset loader: se reutilizo BioImageSegmentationDataset de
+     05_dataset_exploration_and_dataloaders.py sin modificarla.
+   - Loss: BCEWithLogitsLoss + DiceLoss. Metricas: Dice coefficient e IoU.
+   - Split: dataset/train/ -> 90% train interno / 10% val interno.
+     dataset/validate/ -> reservado integro como test final.
+
+4. HALLAZGO DE ENTORNO
+   - environment.yml / requirements.txt del curso NO listan `torch`,
+     pese a que los scripts 04, 05, 06 y 07 lo requieren. Hay que
+     instalarlo aparte (`pip install torch`) dentro del entorno `dlba`.
+
+5. HARDWARE Y ALCANCE DE LA CORRIDA
+   - Maquina sin GPU NVIDIA (AMD Ryzen 7 4700U, grafica integrada).
+   - Calibrado: ~1.54 s/imagen/epoca en CPU -> entrenar sobre las 6716
+     imagenes completas de train/ tomaria varias horas por epoca,
+     inviable localmente para este entregable.
+   - Decision: se ejecuto una corrida real de alcance reducido
+     (200 imagenes de train, 100 de test, 6 epocas, batch=8, ~30 min)
+     para producir resultados genuinos dentro de un tiempo razonable.
+     Recomendacion para resultados finales robustos: escalar
+     (mas imagenes / mas epocas) en Google Colab con GPU (PanNuke tiene
+     "Colab Friendliness: Bueno" segun DATASETS_OVERVIEW.md).
+
+6. COMPARACION CONTRA BASELINE (dataset/model.h5)
+   - Implementada como paso opcional en el script (evaluate_keras_baseline).
+   - Requiere TensorFlow, no instalado en el entorno usado para esta
+     corrida -> el script lo detecta y omite el paso con un aviso,
+     sin romper el resto del pipeline.
+
+7. RESULTADOS (corrida reducida: 180 train / 20 val / 100 test, 6 epocas, CPU)
+   - Test Dice = 0.6965, Test IoU = 0.5635 (n=100). Mejor checkpoint:
+     epoca 2 (val_dice=0.6575). Tiempo total: 31.1 min en CPU.
+   - Ver outputs_modulo2_pannuke/metrics_summary.json,
+     training_history.png y qualitative_predictions.png (generados por
+     modulo2_pannuke_binary_segmentation.py).
+   - Lectura cualitativa: 3 de 4 ejemplos inspeccionados muestran
+     localizacion de nucleos razonable; 1 ejemplo con tincion mas azulada
+     (menor contraste H&E tipico) tuvo deteccion pobre -- limitacion
+     esperada del tamano de muestra reducido (180 imagenes no cubren la
+     variabilidad de tincion de los 19 tejidos de PanNuke). Recomendacion:
+     escalar (mas imagenes/epocas) en Colab con GPU para resultados finales
+     robustos.
+
+8. DESCARGA AUTOMATICA DEL DATASET (agregado 2026-08-14)
+   - Se agrego resolve_dataset_dir(): si dataset/train/images y
+     dataset/validate/images ya existen localmente, se usan tal cual (no
+     descarga nada). Si no existen, descarga automaticamente desde Kaggle
+     ("theredlad/pannuke-dataset-experimental-data") via `kagglehub`.
+   - La API de Kaggle exige credenciales si o si (no hay forma de evitarlo
+     con ningun codigo): token gratuito de una sola vez en
+     kaggle.com/settings -> kaggle.json en ~/.kaggle/ (o variables de
+     entorno KAGGLE_USERNAME/KAGGLE_KEY). No se pudo probar esta ruta de
+     descarga en esta sesion porque no se dispone de credenciales de
+     Kaggle aqui; si se necesitan, el usuario debe configurarlas en su
+     propia maquina. La ruta "dataset ya presente localmente" si se probo
+     y funciona.
+
+9. PRIORIDAD GPU / FALLBACK CPU (agregado 2026-08-14)
+   - Se agrego select_device(): usa CUDA automaticamente si
+     torch.cuda.is_available() es True; si no, cae a CPU sin intervencion
+     manual. Se puede forzar con --device cuda / --device cpu.
+   - Probado en esta maquina (sin GPU NVIDIA): detecta correctamente la
+     ausencia de GPU y selecciona CPU.
+
+10. CAMBIO: kagglehub -> CLI oficial 'kaggle', y cambio de dataset slug
+    (agregado 2026-08-14, a pedido del usuario)
+   - Se reemplazo la descarga via `kagglehub` por el CLI oficial `kaggle`
+     (subprocess + shutil.which para evitar problemas de PATH en Windows),
+     con `kaggle datasets download <slug> -p dataset --unzip`.
+   - Se cambio el slug de Kaggle de "theredlad/pannuke-dataset-experimental-
+     data" a "llwlabs/pannuke". Se verifico que es el MISMO dataset antes de
+     adoptarlo: `kaggle datasets files llwlabs/pannuke` (funciona sin
+     autenticacion) lista un model.h5 de 276,914,520 bytes -- identico byte
+     a byte al que ya esta en dataset/model.h5 -- y los mismos nombres de
+     archivo (train/images/{fold}-{indice}.png).
+   - Se confirmo que `kaggle auth login` (login por navegador, sin manejar
+     kaggle.json a mano) existe de verdad en el CLI instalado (kaggle 2.2.4):
+     aparece como subcomando oficial (auth {login, print-access-token,
+     revoke}).
+   - No se ejecuto una descarga real completa de prueba (para no gastar
+     ancho de banda/disco de forma innecesaria, ya que el dataset ya esta
+     local) -- se verificaron por separado la deteccion del ejecutable, la
+     construccion del comando, y la ruta "ya presente -> se omite descarga".
